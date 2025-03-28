@@ -53,7 +53,7 @@ class Config:
     # Model save paths
     MODEL_SAVE_DIR = 'saved_models'
     CHECKPOINT_PATH = 'saved_models/best_model.keras'
-    TFLITE_PATH = 'saved_models/model.tflite'
+    TFLITE_PATH = 'tflite/model.tflite'
     TFJS_MODEL_DIR = 'tfjs_model'
     
     # Classes
