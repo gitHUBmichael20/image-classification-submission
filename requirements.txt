@@ -1,0 +1,7 @@
+tensorflow==2.19.0
+numpy==1.23.5
+matplotlib==3.7.1
+seaborn==0.12.2
+scikit-learn==1.2.2
+Pillow==9.5.0
+tensorflowjs==4.15.0
