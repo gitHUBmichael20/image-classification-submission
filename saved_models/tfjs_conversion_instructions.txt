@@ -1,0 +1,12 @@
+
+TensorFlow.js Conversion Instructions:
+
+1. Install TensorFlow.js tools:
+   pip install tensorflowjs
+
+2. Convert from SavedModel format:
+   tensorflowjs_converter --input_format=tf_saved_model --output_format=tfjs_graph_model saved_models/saved_model tfjs_model
+
+3. Or convert from H5 format:
+   tensorflowjs_converter --input_format=keras saved_models/model.h5 tfjs_model
+                

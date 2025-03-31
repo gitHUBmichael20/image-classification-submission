@@ -2,253 +2,145 @@ import os
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, models, optimizers
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.callbacks import ReduceLROnPlateau, EarlyStopping, ModelCheckpoint
 from tensorflow.keras.applications import EfficientNetB0
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import classification_report, confusion_matrix
+import subprocess
 
-# Configure GPU settings with memory limit
+# Note: Ensure TensorFlow is installed in your environment:
+# Run `pip install tensorflow` if not already installed.
+
+# Configure GPU settings
 def configure_gpu(memory_limit=4096):
-    """
-    Configure GPU settings with memory limit to prevent system overload
-    
-    Args:
-        memory_limit (int): Maximum GPU memory to allocate in MB
-    """
     gpus = tf.config.list_physical_devices('GPU')
     if gpus:
         try:
-            # Limit GPU memory growth
-            for gpu in gpus:
-                tf.config.experimental.set_virtual_device_configuration(
-                    gpu,
-                    [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit)]
-                )
-            print(f"GPU configured with {memory_limit}MB memory limit")
+            tf.config.set_visible_devices(gpus[0], 'GPU')
+            tf.config.experimental.set_memory_growth(gpus[0], True)
+            tf.config.experimental.set_virtual_device_configuration(
+                gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit)]
+            )
+            print(f"Configured NVIDIA GPU (GPU 0) with {memory_limit}MB limit")
         except RuntimeError as e:
             print(f"GPU configuration error: {e}")
+    else:
+        print("No GPU detected. Falling back to CPU.")
 
-# Seed for reproducibility
+# Set random seed
 np.random.seed(42)
 tf.random.set_seed(42)
 
 class Config:
-    """Configuration class for model hyperparameters and settings"""
-    # Image dimensions
-    IMG_HEIGHT = 160  # Reduced for faster processing
+    IMG_HEIGHT = 160
     IMG_WIDTH = 160
     IMG_CHANNELS = 3
-    
-    # Training parameters
-    BATCH_SIZE = 32  # Reduced batch size for lower memory usage
-    EPOCHS = 50  # Reduced epochs
+    BATCH_SIZE = 16
+    EPOCHS = 50
     LEARNING_RATE = 1e-4
-    
-    # Dataset paths
     TRAIN_DIR = r'C:\Users\USER\Desktop\Dicoding\image_dataset\seg_train\seg_train'
     TEST_DIR = r'C:\Users\USER\Desktop\Dicoding\image_dataset\seg_test\seg_test'
-    
-    # Model save paths
     MODEL_SAVE_DIR = 'saved_models'
     CHECKPOINT_PATH = 'saved_models/best_model.keras'
     TFLITE_PATH = 'tflite/model.tflite'
     TFJS_MODEL_DIR = 'tfjs_model'
-    
-    # Classes
     CLASSES = ['buildings', 'forest', 'glacier', 'mountain', 'sea', 'street']
     NUM_CLASSES = len(CLASSES)
 
 class LandscapeClassifier:
     def __init__(self, config):
-        """
-        Initialize the classifier with configuration settings
-        
-        Args:
-            config (Config): Configuration object with model settings
-        """
         self.config = config
         self.model = None
-        self.train_generator = None
-        self.test_generator = None
-        
-        # Ensure model directories exist
         os.makedirs(self.config.MODEL_SAVE_DIR, exist_ok=True)
-        
-    def _create_data_generators(self):
-        """
-        Create data generators with light augmentation
-        
-        Returns:
-            tuple: Train and test data generators
-        """
-        # Light data augmentation
-        train_datagen = ImageDataGenerator(
-            rescale=1./255,
-            rotation_range=20,
-            width_shift_range=0.1,
-            height_shift_range=0.1,
-            horizontal_flip=True,
-            validation_split=0.2  # Built-in validation split
+        os.makedirs(os.path.dirname(self.config.TFLITE_PATH), exist_ok=True)
+        os.makedirs(self.config.TFJS_MODEL_DIR, exist_ok=True)
+
+    def _create_data_pipeline(self):
+        def parse_image(image, label):
+            image = tf.image.resize(image, [self.config.IMG_HEIGHT, self.config.IMG_WIDTH])
+            image = image / 255.0
+            image = tf.image.random_flip_left_right(image)
+            image = tf.image.random_brightness(image, 0.1)
+            return image, label
+
+        def get_dataset(directory, subset):
+            dataset = tf.keras.preprocessing.image_dataset_from_directory(
+                directory,
+                image_size=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH),
+                batch_size=self.config.BATCH_SIZE,
+                label_mode='categorical',
+                subset=subset,
+                validation_split=0.2,
+                seed=42
+            )
+            return dataset.prefetch(tf.data.AUTOTUNE)
+
+        self.train_dataset = get_dataset(self.config.TRAIN_DIR, 'training').map(
+            parse_image, num_parallel_calls=tf.data.AUTOTUNE
         )
-        
-        # Test data generator (only rescaling)
-        test_datagen = ImageDataGenerator(rescale=1./255)
-        
-        # Create generators
-        self.train_generator = train_datagen.flow_from_directory(
-            self.config.TRAIN_DIR,
-            target_size=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH),
-            batch_size=self.config.BATCH_SIZE,
-            class_mode='categorical',
-            subset='training',  # Set as training subset
-            shuffle=True
-        )
-        
-        self.validation_generator = train_datagen.flow_from_directory(
-            self.config.TRAIN_DIR,
-            target_size=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH),
-            batch_size=self.config.BATCH_SIZE,
-            class_mode='categorical',
-            subset='validation',  # Set as validation subset
-            shuffle=False
-        )
-        
-        self.test_generator = test_datagen.flow_from_directory(
+        self.validation_dataset = get_dataset(self.config.TRAIN_DIR, 'validation')
+        self.test_dataset = tf.keras.preprocessing.image_dataset_from_directory(
             self.config.TEST_DIR,
-            target_size=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH),
+            image_size=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH),
             batch_size=self.config.BATCH_SIZE,
-            class_mode='categorical',
+            label_mode='categorical',
             shuffle=False
-        )
-        
+        ).prefetch(tf.data.AUTOTUNE)
+
     def build_model(self):
-        """
-        Build an efficient CNN model using transfer learning
-        
-        Returns:
-            tf.keras.Model: Compiled CNN model
-        """
-        # Base model with transfer learning
-        base_model = EfficientNetB0(
-            weights='imagenet', 
-            include_top=False, 
-            input_shape=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH, self.config.IMG_CHANNELS)
-        )
-        
-        # Freeze base model layers initially
+        base_model = EfficientNetB0(weights='imagenet', include_top=False,
+                                    input_shape=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH, self.config.IMG_CHANNELS))
         base_model.trainable = False
-        
-        # Build model architecture
-        model = models.Sequential([
+
+        self.model = models.Sequential([
             base_model,
             layers.GlobalAveragePooling2D(),
             layers.Dense(256, activation='relu'),
             layers.Dropout(0.5),
             layers.Dense(self.config.NUM_CLASSES, activation='softmax')
         ])
-        
-        # Compile the model
-        model.compile(
-            optimizer=optimizers.Adam(learning_rate=self.config.LEARNING_RATE),
-            loss='categorical_crossentropy',
-            metrics=['accuracy']
-        )
-        
-        self.model = model
+        self.model.compile(optimizer=optimizers.Adam(learning_rate=self.config.LEARNING_RATE),
+                           loss='categorical_crossentropy', metrics=['accuracy'])
         return self.model
-    
+
     def train(self):
-        """
-        Train the model with efficient callbacks
-        
-        Returns:
-            history: Training history
-        """
-        # Create data generators
-        self._create_data_generators()
-        
-        # Model checkpoint callback
-        model_checkpoint = ModelCheckpoint(
-            self.config.CHECKPOINT_PATH, 
-            save_best_only=True, 
-            monitor='val_accuracy', 
-            mode='max',
-            verbose=1
-        )
-        
-        # Learning rate reduction callback
-        reduce_lr = ReduceLROnPlateau(
-            monitor='val_loss', 
-            factor=0.2, 
-            patience=3, 
-            min_lr=1e-6,
-            verbose=1
-        )
-        
-        # Early stopping
-        early_stopping = EarlyStopping(
-            monitor='val_accuracy', 
-            patience=10, 
-            restore_best_weights=True,
-            verbose=1
-        )
-        
-        # Train the model
+        self._create_data_pipeline()
+        callbacks = [
+            ModelCheckpoint(self.config.CHECKPOINT_PATH, save_best_only=True, monitor='val_accuracy', mode='max', verbose=1),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=1e-6, verbose=1),
+            EarlyStopping(monitor='val_accuracy', patience=10, restore_best_weights=True, verbose=1)
+        ]
         history = self.model.fit(
-            self.train_generator,
-            validation_data=self.validation_generator,
+            self.train_dataset,
+            validation_data=self.validation_dataset,
             epochs=self.config.EPOCHS,
-            callbacks=[model_checkpoint, reduce_lr, early_stopping],
+            callbacks=callbacks,
             verbose=1
         )
-        
         return history
-    
+
     def evaluate(self):
-        """
-        Evaluate the model and generate performance metrics
-        """
-        # Load best saved model
         self.model = tf.keras.models.load_model(self.config.CHECKPOINT_PATH)
-        
-        # Evaluate on test data
-        test_loss, test_accuracy = self.model.evaluate(self.test_generator)
+        test_loss, test_accuracy = self.model.evaluate(self.test_dataset)
         print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
-        
-        # Predict test data
-        y_pred = self.model.predict(self.test_generator)
+
+        y_pred = self.model.predict(self.test_dataset)
         y_pred_classes = np.argmax(y_pred, axis=1)
-        y_true = self.test_generator.classes
-        
-        # Classification report
+        y_true = np.concatenate([y for _, y in self.test_dataset], axis=0).argmax(axis=1)
+
         print("\nClassification Report:")
-        print(classification_report(
-            y_true, 
-            y_pred_classes, 
-            target_names=self.config.CLASSES
-        ))
-        
-        # Confusion Matrix
+        print(classification_report(y_true, y_pred_classes, target_names=self.config.CLASSES))
+
         cm = confusion_matrix(y_true, y_pred_classes)
         plt.figure(figsize=(10, 8))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                    xticklabels=self.config.CLASSES, 
-                    yticklabels=self.config.CLASSES)
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=self.config.CLASSES, yticklabels=self.config.CLASSES)
         plt.title('Confusion Matrix')
         plt.xlabel('Predicted')
         plt.ylabel('Actual')
-        plt.tight_layout()
         plt.savefig(os.path.join(self.config.MODEL_SAVE_DIR, 'confusion_matrix.png'))
-        
+
     def plot_training_history(self, history):
-        """
-        Plot training and validation accuracy/loss
-        
-        Args:
-            history: Training history from model.fit()
-        """
         plt.figure(figsize=(12, 4))
         plt.subplot(1, 2, 1)
         plt.plot(history.history['accuracy'], label='Training Accuracy')
@@ -257,7 +149,6 @@ class LandscapeClassifier:
         plt.xlabel('Epoch')
         plt.ylabel('Accuracy')
         plt.legend()
-        
         plt.subplot(1, 2, 2)
         plt.plot(history.history['loss'], label='Training Loss')
         plt.plot(history.history['val_loss'], label='Validation Loss')
@@ -265,93 +156,52 @@ class LandscapeClassifier:
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
         plt.legend()
-        
-        plt.tight_layout()
         plt.savefig(os.path.join(self.config.MODEL_SAVE_DIR, 'training_history.png'))
-        
+
     def save_tflite_model(self):
-        """
-        Convert and save TF-Lite model
-        """
         converter = tf.lite.TFLiteConverter.from_keras_model(self.model)
         converter.optimizations = [tf.lite.Optimize.DEFAULT]
         tflite_model = converter.convert()
-        
-        # Save TF-Lite model
         with open(self.config.TFLITE_PATH, 'wb') as f:
             f.write(tflite_model)
-        
-        # Write labels
-        with open(os.path.join(self.config.MODEL_SAVE_DIR, 'labels.txt'), 'w') as f:
-            for label in self.config.CLASSES:
-                f.write(f"{label}\n")
+        print(f"TF-Lite model saved to {self.config.TFLITE_PATH}")
 
     def save_tfjs_model(self):
-        """
-        Convert and save TensorFlow.js model
-        
-        Supports two scenarios:
-        1. Convert from current Keras model
-        2. Convert from existing TFLite model if available
-        """
-        # Ensure TFJS model directory exists
-        os.makedirs(self.config.TFJS_MODEL_DIR, exist_ok=True)
-        
-        # Check if TFLite model exists for faster conversion
-        if os.path.exists(self.config.TFLITE_PATH):
-            print("Converting existing TFLite model to TF.js...")
-            try:
-                # Convert TFLite to TF.js
-                import tensorflowjs as tfjs
-                tfjs.converters.convert_tflite(
-                    self.config.TFLITE_PATH, 
-                    self.config.TFJS_MODEL_DIR
-                )
-                print(f"TF.js model saved to {self.config.TFJS_MODEL_DIR}")
-                return
-            except ImportError:
-                print("tensorflowjs not installed. Falling back to Keras model conversion.")
-        
-        # If no TFLite or conversion failed, convert from Keras model
+        keras_path = os.path.join(self.config.MODEL_SAVE_DIR, "model.keras")
         try:
-            import tensorflowjs as tfjs
-            tfjs.converters.convert_keras_model(
-                self.model, 
-                self.config.TFJS_MODEL_DIR
-            )
-            print(f"TF.js model saved to {self.config.TFJS_MODEL_DIR}")
-        except ImportError:
-            print("Cannot convert to TF.js: tensorflowjs library not installed.")
-            print("Install with: pip install tensorflowjs")
+            self.model.save(keras_path)
+            print(f"Model saved in Keras format to {keras_path}")
+        except Exception as e:
+            print(f"Failed to save model in Keras format: {e}")
+            raise
+        
+        cmd = [
+            "tensorflowjs_converter",
+            "--input_format=keras",
+            keras_path,
+            self.config.TFJS_MODEL_DIR
+        ]
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            print(f"TFJS model saved to {self.config.TFJS_MODEL_DIR}")
+            print(f"Conversion output: {result.stdout}")
+        except subprocess.CalledProcessError as e:
+            print(f"TFJS conversion failed: {e.stderr}")
+            raise
+        except FileNotFoundError:
+            print("TensorFlow.js converter not found. Please ensure tensorflowjs is installed.")
+            raise
 
 def main():
-    """Main execution function"""
-    # Configure GPU with memory limit
     configure_gpu(memory_limit=4096)
-    
-    # Initialize configuration
     config = Config()
-    
-    # Create classifier
     classifier = LandscapeClassifier(config)
-    
-    # Build model
-    model = classifier.build_model()
-    model.summary()
-    
-    # Train model
+
+    classifier.build_model().summary()
     history = classifier.train()
-    
-    # Plot training history
     classifier.plot_training_history(history)
-    
-    # Evaluate model
     classifier.evaluate()
-    
-    # Save TF-Lite model
     classifier.save_tflite_model()
-    
-    # Save TF.js model
     classifier.save_tfjs_model()
 
 if __name__ == '__main__':

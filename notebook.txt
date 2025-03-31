@@ -1,41 +1,66 @@
-import os
+mport os
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import layers, models, optimizers # type: ignore
-from tensorflow.keras.preprocessing.image import ImageDataGenerator # type: ignore
-from tensorflow.keras.callbacks import ReduceLROnPlateau, EarlyStopping # type: ignore
+from tensorflow.keras import layers, models, optimizers
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import ReduceLROnPlateau, EarlyStopping, ModelCheckpoint
+from tensorflow.keras.applications import EfficientNetB0
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import classification_report, confusion_matrix
 
-# Set random seed for reproducibility
+# Configure GPU settings with memory limit
+def configure_gpu(memory_limit=4096):
+    """
+    Configure GPU settings with memory limit to prevent system overload
+    
+    Args:
+        memory_limit (int): Maximum GPU memory to allocate in MB
+    """
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            # Limit GPU memory growth
+            for gpu in gpus:
+                tf.config.experimental.set_virtual_device_configuration(
+                    gpu,
+                    [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit)]
+                )
+            print(f"GPU configured with {memory_limit}MB memory limit")
+        except RuntimeError as e:
+            print(f"GPU configuration error: {e}")
+
+# Seed for reproducibility
 np.random.seed(42)
 tf.random.set_seed(42)
 
-# Configuration and Hyperparameters
 class Config:
     """Configuration class for model hyperparameters and settings"""
     # Image dimensions
-    IMG_HEIGHT = 150
-    IMG_WIDTH = 150
+    IMG_HEIGHT = 160  # Reduced for faster processing
+    IMG_WIDTH = 160
     IMG_CHANNELS = 3
     
     # Training parameters
-    BATCH_SIZE = 32
-    EPOCHS = 50
-    LEARNING_RATE = 1e-3
+    BATCH_SIZE = 32  # Reduced batch size for lower memory usage
+    EPOCHS = 50  # Reduced epochs
+    LEARNING_RATE = 1e-4
     
     # Dataset paths
     TRAIN_DIR = r'C:\Users\USER\Desktop\Dicoding\image_dataset\seg_train\seg_train'
     TEST_DIR = r'C:\Users\USER\Desktop\Dicoding\image_dataset\seg_test\seg_test'
+    
+    # Model save paths
+    MODEL_SAVE_DIR = 'saved_models'
+    CHECKPOINT_PATH = 'saved_models/best_model.keras'
+    TFLITE_PATH = 'tflite/model.tflite'
+    TFJS_MODEL_DIR = 'tfjs_model'
     
     # Classes
     CLASSES = ['buildings', 'forest', 'glacier', 'mountain', 'sea', 'street']
     NUM_CLASSES = len(CLASSES)
 
 class LandscapeClassifier:
-    """Main class for building, training, and saving the image classification model"""
-    
     def __init__(self, config):
         """
         Initialize the classifier with configuration settings
@@ -48,23 +73,24 @@ class LandscapeClassifier:
         self.train_generator = None
         self.test_generator = None
         
+        # Ensure model directories exist
+        os.makedirs(self.config.MODEL_SAVE_DIR, exist_ok=True)
+        
     def _create_data_generators(self):
         """
-        Create data generators with augmentation for training and testing
+        Create data generators with light augmentation
         
         Returns:
             tuple: Train and test data generators
         """
-        # Training data augmentation
+        # Light data augmentation
         train_datagen = ImageDataGenerator(
             rescale=1./255,
             rotation_range=20,
-            width_shift_range=0.2,
-            height_shift_range=0.2,
-            shear_range=0.2,
-            zoom_range=0.2,
+            width_shift_range=0.1,
+            height_shift_range=0.1,
             horizontal_flip=True,
-            fill_mode='nearest'
+            validation_split=0.2  # Built-in validation split
         )
         
         # Test data generator (only rescaling)
@@ -75,62 +101,67 @@ class LandscapeClassifier:
             self.config.TRAIN_DIR,
             target_size=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH),
             batch_size=self.config.BATCH_SIZE,
-            class_mode='categorical'
+            class_mode='categorical',
+            subset='training',  # Set as training subset
+            shuffle=True
+        )
+        
+        self.validation_generator = train_datagen.flow_from_directory(
+            self.config.TRAIN_DIR,
+            target_size=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH),
+            batch_size=self.config.BATCH_SIZE,
+            class_mode='categorical',
+            subset='validation',  # Set as validation subset
+            shuffle=False
         )
         
         self.test_generator = test_datagen.flow_from_directory(
             self.config.TEST_DIR,
             target_size=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH),
             batch_size=self.config.BATCH_SIZE,
-            class_mode='categorical'
+            class_mode='categorical',
+            shuffle=False
         )
         
     def build_model(self):
         """
-        Build a CNN model for image classification
+        Build an efficient CNN model using transfer learning
         
         Returns:
             tf.keras.Model: Compiled CNN model
         """
-        self.model = models.Sequential([
-            # First Convolutional Block
-            layers.Conv2D(32, (3, 3), activation='relu', input_shape=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH, self.config.IMG_CHANNELS)),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D((2, 2)),
-            layers.Dropout(0.25),
-            
-            # Second Convolutional Block
-            layers.Conv2D(64, (3, 3), activation='relu'),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D((2, 2)),
-            layers.Dropout(0.35),
-            
-            # Third Convolutional Block
-            layers.Conv2D(128, (3, 3), activation='relu'),
-            layers.BatchNormalization(),
-            layers.MaxPooling2D((2, 2)),
-            layers.Dropout(0.45),
-            
-            # Flatten and Dense Layers
-            layers.Flatten(),
+        # Base model with transfer learning
+        base_model = EfficientNetB0(
+            weights='imagenet', 
+            include_top=False, 
+            input_shape=(self.config.IMG_HEIGHT, self.config.IMG_WIDTH, self.config.IMG_CHANNELS)
+        )
+        
+        # Freeze base model layers initially
+        base_model.trainable = False
+        
+        # Build model architecture
+        model = models.Sequential([
+            base_model,
+            layers.GlobalAveragePooling2D(),
             layers.Dense(256, activation='relu'),
-            layers.BatchNormalization(),
             layers.Dropout(0.5),
             layers.Dense(self.config.NUM_CLASSES, activation='softmax')
         ])
         
         # Compile the model
-        self.model.compile(
+        model.compile(
             optimizer=optimizers.Adam(learning_rate=self.config.LEARNING_RATE),
             loss='categorical_crossentropy',
             metrics=['accuracy']
         )
         
+        self.model = model
         return self.model
     
     def train(self):
         """
-        Train the model with data generators and callbacks
+        Train the model with efficient callbacks
         
         Returns:
             history: Training history
@@ -138,28 +169,39 @@ class LandscapeClassifier:
         # Create data generators
         self._create_data_generators()
         
-        # Callbacks
+        # Model checkpoint callback
+        model_checkpoint = ModelCheckpoint(
+            self.config.CHECKPOINT_PATH, 
+            save_best_only=True, 
+            monitor='val_accuracy', 
+            mode='max',
+            verbose=1
+        )
+        
+        # Learning rate reduction callback
         reduce_lr = ReduceLROnPlateau(
             monitor='val_loss', 
             factor=0.2, 
             patience=3, 
-            min_lr=1e-5
+            min_lr=1e-6,
+            verbose=1
         )
         
+        # Early stopping
         early_stopping = EarlyStopping(
             monitor='val_accuracy', 
             patience=10, 
-            restore_best_weights=True
+            restore_best_weights=True,
+            verbose=1
         )
         
         # Train the model
         history = self.model.fit(
             self.train_generator,
-            steps_per_epoch=self.train_generator.samples // self.config.BATCH_SIZE,
-            validation_data=self.test_generator,
-            validation_steps=self.test_generator.samples // self.config.BATCH_SIZE,
+            validation_data=self.validation_generator,
             epochs=self.config.EPOCHS,
-            callbacks=[reduce_lr, early_stopping]
+            callbacks=[model_checkpoint, reduce_lr, early_stopping],
+            verbose=1
         )
         
         return history
@@ -168,11 +210,14 @@ class LandscapeClassifier:
         """
         Evaluate the model and generate performance metrics
         """
+        # Load best saved model
+        self.model = tf.keras.models.load_model(self.config.CHECKPOINT_PATH)
+        
         # Evaluate on test data
         test_loss, test_accuracy = self.model.evaluate(self.test_generator)
         print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
         
-        # Predict test data for confusion matrix
+        # Predict test data
         y_pred = self.model.predict(self.test_generator)
         y_pred_classes = np.argmax(y_pred, axis=1)
         y_true = self.test_generator.classes
@@ -195,7 +240,7 @@ class LandscapeClassifier:
         plt.xlabel('Predicted')
         plt.ylabel('Actual')
         plt.tight_layout()
-        plt.savefig('confusion_matrix.png')
+        plt.savefig(os.path.join(self.config.MODEL_SAVE_DIR, 'confusion_matrix.png'))
         
     def plot_training_history(self, history):
         """
@@ -204,7 +249,6 @@ class LandscapeClassifier:
         Args:
             history: Training history from model.fit()
         """
-        # Accuracy Plot
         plt.figure(figsize=(12, 4))
         plt.subplot(1, 2, 1)
         plt.plot(history.history['accuracy'], label='Training Accuracy')
@@ -214,7 +258,6 @@ class LandscapeClassifier:
         plt.ylabel('Accuracy')
         plt.legend()
         
-        # Loss Plot
         plt.subplot(1, 2, 2)
         plt.plot(history.history['loss'], label='Training Loss')
         plt.plot(history.history['val_loss'], label='Validation Loss')
@@ -224,37 +267,216 @@ class LandscapeClassifier:
         plt.legend()
         
         plt.tight_layout()
-        plt.savefig('training_history.png')
+        plt.savefig(os.path.join(self.config.MODEL_SAVE_DIR, 'training_history.png'))
         
-    def save_models(self):
+    def save_tflite_model(self):
         """
-        Save model in different formats: SavedModel, TF-Lite, TFJS
+        Convert and save TF-Lite model
         """
-        # SavedModel
-        tf.saved_model.save(self.model, 'saved_model')
+        # Ensure tflite directory exists
+        os.makedirs(os.path.dirname(self.config.TFLITE_PATH), exist_ok=True)
         
-        # TF-Lite conversion
         converter = tf.lite.TFLiteConverter.from_keras_model(self.model)
+        converter.optimizations = [tf.lite.Optimize.DEFAULT]
         tflite_model = converter.convert()
         
-        with open('tflite/model.tflite', 'wb') as f:
+        # Save TF-Lite model
+        with open(self.config.TFLITE_PATH, 'wb') as f:
             f.write(tflite_model)
         
-        # Write labels for TF-Lite
-        with open('tflite/label.txt', 'w') as f:
+        # Write labels
+        with open(os.path.join(self.config.MODEL_SAVE_DIR, 'labels.txt'), 'w') as f:
             for label in self.config.CLASSES:
                 f.write(f"{label}\n")
-        
-        # TFJS conversion
-        import tensorflowjs as tfjs
-        tfjs.converters.convert_keras(
-            self.model, 
-            output_dir='tfjs_model',
-            quantization_dtype=None
-        )
+
+    def save_tfjs_model(self):
+        """
+        Save Keras model to TensorFlow.js format using a direct command-line approach
+        to bypass the NumPy deprecation issue in the tensorflowjs library
+        """
+        try:
+            # Ensure TFJS model directory exists
+            os.makedirs(self.config.TFJS_MODEL_DIR, exist_ok=True)
+            
+            # First save the model in SavedModel format
+            saved_model_path = os.path.join(self.config.MODEL_SAVE_DIR, "saved_model")
+            tf.saved_model.save(self.model, saved_model_path)
+            
+            # Check if tensorflowjs_converter is available
+            import subprocess
+            import sys
+            
+            # Try both approaches: use tensorflowjs command-line tool or save with patched library
+            try:
+                # Method 1: Try command-line approach
+                cmd = [
+                    sys.executable, "-m", "tensorflowjs.converters.converter",
+                    "--input_format=tf_saved_model",
+                    f"--saved_model_tags=serve",
+                    f"--output_format=tfjs_graph_model",
+                    saved_model_path,
+                    self.config.TFJS_MODEL_DIR
+                ]
+                
+                print(f"Running conversion command: {' '.join(cmd)}")
+                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                print(f"Command output: {result.stdout}")
+                print(f"TensorFlow.js model saved successfully to {self.config.TFJS_MODEL_DIR}")
+                
+            except (subprocess.SubprocessError, FileNotFoundError) as e:
+                print(f"Command-line conversion failed: {e}")
+                print("Trying alternative approach with patched library...")
+                
+                # Method 2: Monkey patch the tensorflowjs library to fix the np.object issue
+                import tensorflowjs as tfjs
+                try:
+                    # Apply monkey patch for numpy.object deprecation
+                    import numpy as np
+                    import tensorflowjs.read_weights as read_weights
+                    
+                    # Find and fix the list containing np.object
+                    if hasattr(read_weights, 'DTYPE_BYTES'):
+                        # Save the original list
+                        original_dtype_bytes = read_weights.DTYPE_BYTES
+                        
+                        # Create a new list with object instead of np.object
+                        fixed_dtype_bytes = []
+                        for dtype in original_dtype_bytes:
+                            if dtype == np.object:
+                                fixed_dtype_bytes.append(object)
+                            else:
+                                fixed_dtype_bytes.append(dtype)
+                        
+                        # Replace the list
+                        read_weights.DTYPE_BYTES = fixed_dtype_bytes
+                        print("Successfully patched tensorflowjs.read_weights")
+                    
+                    # Now convert the model
+                    tfjs.converters.save_keras_model(
+                        self.model, 
+                        self.config.TFJS_MODEL_DIR
+                    )
+                    print(f"TensorFlow.js model saved successfully to {self.config.TFJS_MODEL_DIR} using patched library")
+                
+                except Exception as patch_error:
+                    print(f"Error with patched library approach: {patch_error}")
+                    # Method 3: Use tf.js H5 conversion as fallback
+                    print("Trying H5 format as final fallback...")
+                    
+                    # Save as H5 first
+                    h5_path = os.path.join(self.config.MODEL_SAVE_DIR, "model.h5")
+                    self.model.save(h5_path)
+                    
+                    # Try to convert H5 to TFJS
+                    try:
+                        cmd = [
+                            sys.executable, "-m", "tensorflowjs.converters.converter",
+                            "--input_format=keras",
+                            h5_path,
+                            self.config.TFJS_MODEL_DIR
+                        ]
+                        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                        print(f"H5 conversion succeeded: {result.stdout}")
+                    except Exception as h5_error:
+                        print(f"H5 conversion failed: {h5_error}")
+                        raise RuntimeError("All TensorFlow.js conversion methods failed")
+                    
+            # Verify files are created
+            tfjs_files = os.listdir(self.config.TFJS_MODEL_DIR)
+            print("Generated files:", tfjs_files)
+            
+            # Create a basic HTML file to test the model
+            html_path = os.path.join(self.config.TFJS_MODEL_DIR, "index.html")
+            with open(html_path, 'w') as f:
+                f.write("""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TensorFlow.js Landscape Classifier</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.18.0"></script>
+    <script>
+        async function loadAndTestModel() {
+            try {
+                const model = await tf.loadGraphModel('./model.json');
+                console.log('Model loaded successfully');
+                
+                // Create a test tensor (blank image)
+                const testTensor = tf.zeros([1, 160, 160, 3]);
+                
+                // Run inference
+                const result = model.predict(testTensor);
+                const scores = result.dataSync();
+                console.log('Prediction scores:', scores);
+                
+                document.getElementById('status').textContent = 'Model loaded and tested successfully!';
+            } catch (error) {
+                console.error('Error loading or testing model:', error);
+                document.getElementById('status').textContent = 'Error: ' + error.message;
+            }
+        }
+    </script>
+</head>
+<body onload="loadAndTestModel()">
+    <h1>TensorFlow.js Landscape Classifier</h1>
+    <p id="status">Loading model...</p>
+</body>
+</html>
+                """)
+            print(f"Created test HTML file at {html_path}")
+
+        except ImportError:
+            print("TensorFlow.js library not installed. Please install with:")
+            print("pip install tensorflowjs")
+            
+            # Alternative: Create a SavedModel that can be converted later
+            saved_model_path = os.path.join(self.config.MODEL_SAVE_DIR, "saved_model")
+            tf.saved_model.save(self.model, saved_model_path)
+            print(f"Model saved in SavedModel format at {saved_model_path}")
+            print("You can convert it to TensorFlow.js format later using:")
+            print(f"tensorflowjs_converter --input_format=tf_saved_model --output_format=tfjs_graph_model {saved_model_path} {self.config.TFJS_MODEL_DIR}")
+            
+        except Exception as e:
+            print(f"Error converting model to TF.js: {e}")
+            print("Saving model in alternative formats for later conversion...")
+            
+            # Save in multiple formats for flexibility
+            h5_path = os.path.join(self.config.MODEL_SAVE_DIR, "model.h5")
+            saved_model_path = os.path.join(self.config.MODEL_SAVE_DIR, "saved_model")
+            
+            try:
+                self.model.save(h5_path)
+                print(f"Model saved in H5 format at {h5_path}")
+            except Exception as h5_error:
+                print(f"Failed to save H5 format: {h5_error}")
+                
+            try:
+                tf.saved_model.save(self.model, saved_model_path)
+                print(f"Model saved in SavedModel format at {saved_model_path}")
+            except Exception as sm_error:
+                print(f"Failed to save SavedModel format: {sm_error}")
+                
+            # Write instructions for manual conversion
+            instructions_path = os.path.join(self.config.MODEL_SAVE_DIR, "tfjs_conversion_instructions.txt")
+            with open(instructions_path, 'w') as f:
+                f.write("""
+TensorFlow.js Conversion Instructions:
+
+1. Install TensorFlow.js tools:
+   pip install tensorflowjs
+
+2. Convert from SavedModel format:
+   tensorflowjs_converter --input_format=tf_saved_model --output_format=tfjs_graph_model saved_models/saved_model tfjs_model
+
+3. Or convert from H5 format:
+   tensorflowjs_converter --input_format=keras saved_models/model.h5 tfjs_model
+                """)
+            print(f"Conversion instructions written to {instructions_path}")
 
 def main():
     """Main execution function"""
+    # Configure GPU with memory limit
+    configure_gpu(memory_limit=4096)
+    
     # Initialize configuration
     config = Config()
     
@@ -274,8 +496,11 @@ def main():
     # Evaluate model
     classifier.evaluate()
     
-    # Save models
-    classifier.save_models()
+    # Save TF-Lite model
+    classifier.save_tflite_model()
+    
+    # Save TF.js model with robust error handling
+    classifier.save_tfjs_model()
 
 if __name__ == '__main__':
     main()
