@@ -46,7 +46,7 @@ class Config:
     TFJS_MODEL_DIR = 'tfjs_model'
     CLASSES = ['buildings', 'forest', 'glacier', 'mountain', 'sea', 'street']
     NUM_CLASSES = len(CLASSES)
-    MODEL_JSON_PATH = 'model_info.json'
+    MODEL_JSON_PATH = 'tfjs_model/model_info.json'
 
 class LandscapeClassifier:
     def __init__(self, config):
