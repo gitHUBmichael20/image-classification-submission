@@ -1,0 +1,69 @@
+{
+  "format": "tfjs-layers-model",
+  "generatedBy": "keras v2.19.0",
+  "convertedBy": "TensorFlow.js Converter v2.x",
+  "modelTopology": {
+    "class_name": "Sequential",
+    "config": {
+      "name": "sequential",
+      "layers": [
+        {
+          "class_name": "EfficientNetB0",
+          "config": {
+            "trainable": false
+          }
+        },
+        {
+          "class_name": "GlobalAveragePooling2D",
+          "config": {}
+        },
+        {
+          "class_name": "Dense",
+          "config": {
+            "units": 256,
+            "activation": "relu"
+          }
+        },
+        {
+          "class_name": "Dropout",
+          "config": {
+            "rate": 0.5
+          }
+        },
+        {
+          "class_name": "Dense",
+          "config": {
+            "units": 6,
+            "activation": "softmax"
+          }
+        }
+      ]
+    },
+    "keras_version": "2.x"
+  },
+  "weightsManifest": [],
+  "signature": {
+    "inputs": {
+      "input_1": {
+        "name": "input_1",
+        "dtype": "float32",
+        "shape": [
+          null,
+          160,
+          160,
+          3
+        ]
+      }
+    },
+    "outputs": {
+      "dense_1": {
+        "name": "dense_1",
+        "dtype": "float32",
+        "shape": [
+          null,
+          6
+        ]
+      }
+    }
+  }
+}
