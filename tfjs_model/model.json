@@ -1,7 +1,7 @@
 {
   "format": "tfjs-layers-model",
-  "generatedBy": "keras v2.19.0",
-  "convertedBy": "TensorFlow.js Converter v2.x",
+  "generatedBy": "LandscapeClassifier",
+  "convertedBy": "TensorFlow.js Converter",
   "modelTopology": {
     "class_name": "Sequential",
     "config": {
@@ -38,8 +38,7 @@
           }
         }
       ]
-    },
-    "keras_version": "2.x"
+    }
   },
   "weightsManifest": [],
   "signature": {

@@ -1,6 +1,6 @@
 {
-    "status": "tfjs_converter_not_found",
-    "timestamp": "2025-03-31 17:04:57",
+    "status": "training_started",
+    "timestamp": "2025-04-08 22:02:55",
     "configuration": {
         "img_dimensions": "160x160x3",
         "batch_size": 16,
@@ -16,10 +16,10 @@
         ],
         "num_classes": 6
     },
-    "last_updated": "2025-03-31 17:56:55",
+    "last_updated": "2025-04-08 22:02:57",
     "model": {
         "base_model": "EfficientNetB0",
-        "trainable_base": false,
+        "trainable_base": true,
         "total_parameters": 4379049,
         "compile_config": {
             "optimizer": "Adam",
@@ -34,84 +34,5 @@
         "train_samples": 11232,
         "validation_samples": 2816,
         "test_samples": 3008
-    },
-    "training": {
-        "completed": true,
-        "epochs_completed": 30,
-        "best_val_accuracy": 0.09230221062898636,
-        "final_val_accuracy": 0.0919458270072937,
-        "best_val_loss": 1.9638326168060303,
-        "final_val_loss": 1.9638326168060303
-    },
-    "training_history_plot": "saved_models\\training_history.png",
-    "evaluation": {
-        "test_accuracy": 0.08566666394472122,
-        "test_loss": 1.963308572769165,
-        "classification_report": {
-            "buildings": {
-                "precision": 0.10354223433242507,
-                "recall": 0.08695652173913043,
-                "f1-score": 0.0945273631840796,
-                "support": 437.0
-            },
-            "forest": {
-                "precision": 0.0975609756097561,
-                "recall": 0.2616033755274262,
-                "f1-score": 0.14212034383954156,
-                "support": 474.0
-            },
-            "glacier": {
-                "precision": 0.10933333333333334,
-                "recall": 0.07414104882459313,
-                "f1-score": 0.08836206896551724,
-                "support": 553.0
-            },
-            "mountain": {
-                "precision": 0.024752475247524754,
-                "recall": 0.009523809523809525,
-                "f1-score": 0.013755158184319119,
-                "support": 525.0
-            },
-            "sea": {
-                "precision": 0.034482758620689655,
-                "recall": 0.029411764705882353,
-                "f1-score": 0.031746031746031744,
-                "support": 510.0
-            },
-            "street": {
-                "precision": 0.09714285714285714,
-                "recall": 0.06786427145708583,
-                "f1-score": 0.0799059929494712,
-                "support": 501.0
-            },
-            "accuracy": 0.08566666666666667,
-            "macro avg": {
-                "precision": 0.07780243904776435,
-                "recall": 0.08825013196298791,
-                "f1-score": 0.07506949314482673,
-                "support": 3000.0
-            },
-            "weighted avg": {
-                "precision": 0.07706767333523369,
-                "recall": 0.08566666666666667,
-                "f1-score": 0.07366085384474844,
-                "support": 3000.0
-            }
-        },
-        "confusion_matrix_path": "saved_models\\confusion_matrix.png"
-    },
-    "tflite_model": {
-        "path": "tflite/model.tflite",
-        "size_bytes": 4874232
-    },
-    "tfjs_model_json": {
-        "path": "tfjs_model\\model.json",
-        "status": "updated with model details"
-    },
-    "tfjs_error": {
-        "message": "TensorFlow.js converter not found",
-        "solution": "Install tensorflowjs package with 'pip install tensorflowjs'"
-    },
-    "pipeline_completed": true,
-    "completion_time": "2025-03-31 17:56:55"
+    }
 }
