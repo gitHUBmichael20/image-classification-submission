@@ -1,10 +1,10 @@
 {
     "status": "training_started",
-    "timestamp": "2025-04-08 22:02:55",
+    "timestamp": "2025-04-09 12:01:17",
     "configuration": {
         "img_dimensions": "160x160x3",
         "batch_size": 16,
-        "epochs": 50,
+        "epochs": 35,
         "learning_rate": 0.0001,
         "classes": [
             "buildings",
@@ -16,11 +16,11 @@
         ],
         "num_classes": 6
     },
-    "last_updated": "2025-04-08 22:02:57",
+    "last_updated": "2025-04-09 12:01:22",
     "model": {
         "base_model": "EfficientNetB0",
-        "trainable_base": true,
-        "total_parameters": 4379049,
+        "trainable_base": "Partial (top 50 layers)",
+        "total_parameters": 4841385,
         "compile_config": {
             "optimizer": "Adam",
             "learning_rate": 0.0001,
