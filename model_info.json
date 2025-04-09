@@ -1,5 +1,5 @@
 {
     "status": "emergency_fallback",
     "error": "'LandscapeClassifier' object has no attribute 'plot_training_history'",
-    "timestamp": "2025-04-09 11:54:58"
+    "timestamp": "2025-04-09 16:00:31"
 }
